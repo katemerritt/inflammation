@@ -1,0 +1,709 @@
+---
+title: "H5_Paper"
+author: "KM"
+date: "2025-07-30"
+output: html_document
+---
+
+```{r message=FALSE, warning=FALSE}
+
+# install.packages("emmeans")
+# install.packages("ggeffects")
+# install.packages("lmerTest")
+# install.packages("mixtools")
+# install.packages("lavaan")
+# install.packages("mediation") 
+# install.packages("tableone")
+
+
+library("tidyverse")
+library("ggplot2")
+library("dplyr")  
+library("ggthemes")
+library("data.table")
+library("scales")   # to use 'cols <- hue_pal()(4)'
+library("MASS")
+library("car")
+library("emmeans")
+library("ggeffects")
+library("lme4")
+library("lmerTest")
+library("mixtools")
+library("mediation")
+library("lavaan")
+library("tableone")
+
+```
+
+
+
+```{r  include=FALSE, message=FALSE, echo=FALSE}
+
+mri_crp <- read.csv(
+  file=file.path(root_dir, "R_scripts/inflamm/dataframes/continuous_inflamm_variables/F1_MRI_inflamm_PRS.csv"),
+  na.strings = c("#NULL!", "NA", "N/A", "-9999", "missing")
+)
+
+
+mri_crp <- mri_crp %>%
+  mutate(pliks18TH_bin = case_when(
+    pliks18TH == 0 ~ "0",
+    pliks18TH == 1 ~ "1",
+    pliks18TH == 2 ~ "1",
+    pliks18TH == 3 ~ "1"
+  ))
+table(mri_crp$pliks18TH_bin)
+
+```
+
+## Remove those who did not complete PE assessment
+```{r}
+
+# o = no PE, 1 = pe
+mri_crp_pe <- mri_crp[
+  !is.na(mri_crp$pliks18TH_bin),
+]
+ 
+table(mri_crp_pe$pliks18TH_bin)
+
+```
+## Create missing variable for CRP
+```{r}
+
+# code variable, 0 if crp not missing, 1 if crp missing
+mri_crp_pe <- mri_crp_pe %>%
+  mutate(CRP_F9_log2_miss = ifelse(is.na(CRP_F9_log2), 1, 0))
+
+table(mri_crp_pe$CRP_F9_log2_miss)
+```
+## Demographics table of full MRI sample and subsamples
+### Cannot statistically compare full mri sample and mri inflammation sub-sample as not independent
+```{r}
+
+# library("tableone")
+
+vars <- c("age_at_scan", "kz021", "tiv", "pliks18TH_bin")  
+
+# Specify categorical variables
+cat_vars <- c("kz021", "pliks18TH_bin")
+
+# Create table by group: CRP not missing + CRP missing
+tab <- CreateTableOne(vars = vars, strata = "CRP_F9_log2_miss", data = mri_crp_pe, factorVars = cat_vars)
+
+# Print table
+print(tab, showAllLevels = TRUE, quote = FALSE, noSpaces = TRUE, test = FALSE)
+
+
+
+
+```
+### Table for whole MRI sample n = 413
+```{r}
+mri_crp_pe$CRP_F9_log2_miss2 <- mri_crp_pe$CRP_F9_log2_miss
+mri_crp_pe$CRP_F9_log2_miss2[is.na(mri_crp_pe$CRP_F9_log2_miss2)] <- "All"
+
+tab_all <- CreateTableOne(vars = vars, data = mri_crp_pe, factorVars = cat_vars)
+print(tab_all, showAllLevels = TRUE)
+```
+
+
+
+
+
+
+
+## CRP dataset
+```{r}
+
+
+crp_roi <- read.csv(
+  file=file.path(root_dir, "Dropbox/R/alspac_iii/R_scripts/inflamm/dataframes/continuous_inflamm_variables/F1_MRI_inflamm_PRS_CRP_F9_log2_n244.csv"),
+  na.strings = c("#NULL!", "NA", "N/A", "-9999", "-1")
+)
+
+
+```
+
+## IL-6 dataset
+```{r}
+mri_il6 <- mri_crp[
+  !is.na(mri_crp$IL6_pgml_f9) & 
+  !is.na(mri_crp$pliks18TH_bin),
+]
+
+
+# how do il-6 and crp dataset differ
+setdiff(crp_roi$id, mri_il6$id)
+setdiff(mri_il6$id, crp_roi$id)
+# each dataset (crp aand il6) differ by 1 person
+# While both biomarkers were available for 244 individuals, the samples differed slightly: one participant had CRP but not IL-6 data, and one had IL-6 data but not CRP. 
+
+
+
+```
+
+
+## Log2 transform pgml IL-6
+```{r}
+
+mri_il6$IL6_pgml_f9_log2 <- log2(mri_il6$IL6_pgml_f9)
+summary(mri_il6$IL6_pgml_f9_log2)
+sum(!is.na(mri_il6$IL6_pgml_f9_log2)) 
+
+
+ggplot(mri_il6, aes(x = IL6_pgml_f9_log2)) +
+  geom_histogram(binwidth = 0.1, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of IL6_pgml_f9_log2", x = "IL6_pgml_f9_log2 Values", y = "Frequency") +
+  theme_minimal()
+
+ggplot(mri_il6, aes(x = IL6_pgml_f9)) +
+  geom_histogram(binwidth = 0.1, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of IL6_pgml_f9", x = "IL6_pgml_f9 Values", y = "Frequency") +
+  theme_minimal()
+
+
+
+```
+
+
+
+
+# Table 1
+### Demographics: Age and sex between PE groups
+
+```{r demographics}
+
+# o = no PE, 1 = pe
+table(mri_il6$pliks18TH_bin)
+
+# o = no PE, 1 = pe
+table(crp_roi$pliks18TH_bin)
+
+
+crp_roi$pliks18TH_bin <- as.factor(crp_roi$pliks18TH_bin)
+mri_il6$pliks18TH_bin <- as.factor(mri_il6$pliks18TH_bin)
+
+
+# How many PE and non PE by sex
+ftable(xtabs(~ pliks18TH_bin + kz021, data = crp_roi))
+ftable(xtabs(~ pliks18TH_bin + kz021, data = mri_il6))
+
+# Chi square: sex
+tab <- xtabs(~ pliks18TH_bin + kz021, data = mri_il6)
+chisq.test(tab)
+
+tab_CRP <- xtabs(~ pliks18TH_bin + kz021, data = crp_roi)
+chisq.test(tab_CRP)
+
+
+# Age CRP dataset
+# PE group significantly younger than non-PE
+
+
+# check variance
+leveneTest(age_at_scan ~ pliks18TH_bin, data = crp_roi)
+# p < 0.05 → Significant difference in variance (use Welch’s t-test instead of Student’s t-test).
+
+# independent t-test
+# Welch’s t-test does not assume equal variances: "= FALSE)"
+t.test(age_at_scan ~ pliks18TH_bin, data = crp_roi, var.equal = FALSE)  
+
+
+# mean and SD CRP
+crp_roi %>%
+  group_by(pliks18TH_bin) %>%
+  summarise(
+    Mean = mean(age_at_scan, na.rm = TRUE),
+    SD = sd(age_at_scan, na.rm = TRUE),
+    N = n()
+  )
+
+
+
+# Age IL-6 dataset
+
+
+mri_il6 %>%
+  group_by(pliks18TH_bin) %>%
+  summarise(
+    mean_age = mean(age_at_scan, na.rm = TRUE),
+    sd_age = sd(age_at_scan, na.rm = TRUE),
+    n = n()
+  )
+
+mri_il6$pliks18TH_bin <- as.factor(mri_il6$pliks18TH_bin)
+leveneTest(age_at_scan ~ pliks18TH_bin, data = mri_il6)
+t.test(age_at_scan ~ pliks18TH_bin, data = mri_il6, var.equal = FALSE)  
+
+
+
+```
+
+
+# Table 1
+### Demographics: TIV (total intracranial volume) between PE groups
+
+```{r tiv}
+
+crp_roi %>%
+  group_by(pliks18TH_bin) %>%
+  summarise(
+    mean_tiv = mean(tiv, na.rm = TRUE),
+    sd_tiv = sd(tiv, na.rm = TRUE),
+    n = n()
+  )
+crp_roi$pliks18TH_bin <- as.factor(crp_roi$pliks18TH_bin)
+leveneTest(tiv ~ pliks18TH_bin, data = crp_roi)
+# p = 0.0669 is just above 0.05. Be conservative USE Welch’s t-test (i.e., var.equal = FALSE). It's more robust and often preferred by default, especially in real-world data where equal variances are rare.
+
+t.test(tiv ~ pliks18TH_bin, data = crp_roi, var.equal = FALSE) 
+
+mri_il6 %>%
+  group_by(pliks18TH_bin) %>%
+  summarise(
+    mean_tiv = mean(tiv, na.rm = TRUE),
+    sd_tiv = sd(tiv, na.rm = TRUE),
+    n = n()
+  )
+mri_il6$pliks18TH_bin <- as.factor(mri_il6$pliks18TH_bin)
+leveneTest(tiv ~ pliks18TH_bin, data = mri_il6)
+t.test(tiv ~ pliks18TH_bin, data = mri_il6, var.equal = FALSE) 
+
+```
+
+# Table 1
+### Demographics: IL6 and CRP mean value + SD
+#### Use raw values as clinically meaningful
+
+```{r mean crp / il-6 per clincial group}
+
+
+crp_roi %>%
+  group_by(pliks18TH_bin) %>%
+  summarise(
+    mean_CRP_f9 = mean(CRP_f9, na.rm = TRUE),
+    sd_CRP_f9 = sd(CRP_f9, na.rm = TRUE),
+    n = n()
+  )
+
+
+mri_il6 %>%
+  group_by(pliks18TH_bin) %>%
+  summarise(
+    mean_IL6_pgml_f9 = mean(IL6_pgml_f9, na.rm = TRUE),
+    sd_IL6_pgml_f9 = sd(IL6_pgml_f9, na.rm = TRUE),
+    n = n()
+  )
+
+
+```
+
+
+# Odds ratio for neuroimaging sample
+### CRP log2 > PE
+
+```{r odds ratio CRP}
+
+# For CRP Unadjusted
+model_crp_unadj <- glm(pliks18TH_bin ~ CRP_F9_log2, data = crp_roi, family = binomial)
+# Adjusted
+model_crp_adj <- glm(pliks18TH_bin ~ CRP_F9_log2 + kz021 + f9ms026a + c755_imputed, 
+                     data = crp_roi, family = binomial)
+
+
+
+# ORs
+exp(cbind(OR = coef(model_crp_unadj), confint(model_crp_unadj)))
+exp(cbind(OR = coef(model_crp_adj), confint(model_crp_adj)))
+
+
+
+# Full output
+summary(model_crp_unadj)
+summary(model_crp_adj)
+
+
+```
+
+
+# Odds ratio
+### IL-6 log2 > PE
+
+```{r odds ratio IL-6}
+
+# For IL-6 Unadjusted
+model_il6_unadj <- glm(pliks18TH_bin ~ IL6_pgml_f9_log2, data = mri_il6, family = binomial)
+
+# Adjusted
+model_il6_adj <- glm(pliks18TH_bin ~ IL6_pgml_f9_log2 + kz021 + f9ms026a + c755_imputed, 
+                     data = mri_il6, family = binomial)
+
+
+# ORs
+exp(cbind(OR = coef(model_il6_unadj), confint(model_il6_unadj)))
+exp(cbind(OR = coef(model_il6_adj), confint(model_il6_adj)))
+
+# Full output
+summary(model_il6_unadj)
+summary(model_il6_adj)
+
+
+```
+
+
+
+# Exclude acute infection at time of blood sample
+### Exclude 5 individuals with CRP above 10
+
+```{r}
+
+
+mri_crp_rm_infect <- mri_crp[
+  !is.na(mri_crp$CRP_F9_log2) & 
+  mri_crp$CRP_f9 <= 10 & 
+  !is.na(mri_crp$pliks18TH_bin),
+]
+
+
+```
+
+
+# IL-6: For IL6_pgml_f9, a statistical cut-off would be more acceptable as we don't have a clinical cut-off.
+### Exclude 4 SD above
+
+
+```{r}
+
+mri_il6_filtered_Sd4 <- mri_il6[abs(mri_il6$IL6_pgml_f9 - mean(mri_il6$IL6_pgml_f9, na.rm = TRUE)) <= 
+                            4 * sd(mri_il6$IL6_pgml_f9, na.rm = TRUE), ]
+# n = 4
+```
+
+```{r}
+ggplot(mri_il6, aes(x = IL6_pgml_f9)) +
+  geom_histogram(binwidth = 0.1, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of IL6_pgml_f9", x = "IL6_pgml_f9 Values", y = "Frequency") +
+  theme_minimal()
+
+
+ggplot(mri_il6_filtered_Sd4, aes(x = IL6_pgml_f9)) +
+  geom_histogram(binwidth = 0.1, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of IL6_pgml_f9", x = "IL6_pgml_f9 Values", y = "Frequency") +
+  theme_minimal()
+```
+
+#####
+####
+###
+##
+#
+
+# CRP
+
+#
+##
+###
+####
+#####
+
+
+## Significant cluster in superior frontal cortex 
+### Variable name for grey matter volume: 'crp_x_pe_sup_front'
+
+
+```{r CRP x PE on grey matter volume }
+
+# Adjust for sex and tiv etc, as extracted gm is not adjusted for sex etc
+# http://windstalker.pbworks.com/w/page/51179538/Structural%20ROI%20Analysis%20using%20MarsBar 
+# Marsbar extraction does NOT take into consideration any covariate from your SPM design  
+
+# The default LM is type 3
+lm_crp_adj <- lm(crp_x_pe_sup_front ~ pliks18TH_bin * CRP_F9_log2 + age_at_scan + kz021 + tiv + site + c755_imputed, data=crp_roi)
+anova(lm_crp_adj) # 'anova' = effect of variable, whilst accounting for other variables in model 
+
+
+  # emtrends() estimates the slope of CRP within each group.
+  # In each group, does slope differ from zero?
+  # library(emmeans)
+  simple_slopes <- emtrends(lm_crp_adj, pairwise ~ pliks18TH_bin, var = "CRP_F9_log2")
+  summary(simple_slopes, infer = TRUE)
+  
+  # bottom line is the between groups difference 
+  # 'pairwise' compares whether slopes differ between groups.
+  # The difference in CRP–volume associations between groups was statistically significant
+
+
+```
+
+
+
+```{r}
+crp_roi$pliks18TH_bin <- factor(as.character(crp_roi$pliks18TH_bin),
+                                 levels = c("0", "1"),
+                                 labels = c("Control", "Psychotic Experiences (PE)"))
+
+
+```
+
+```{r plot interaction CRP x PE on frontal grey matter volume}
+
+# library(ggeffects)
+
+# Generate predictions from the adjusted model
+preds <- ggpredict(lm_crp_adj, terms = c("CRP_F9_log2 [all]", "pliks18TH_bin"))
+
+preds$group <- factor(as.character(preds$group),
+                                 levels = c("0", "1"),
+                                 labels = c("Control", "Psychotic Experiences (PE)"))
+
+
+
+# Plot predicted lines with confidence intervals, plus original points
+p <- ggplot() +
+  # raw points
+  geom_point(data = crp_roi,
+             aes(x = CRP_F9_log2, y = crp_x_pe_sup_front, color = pliks18TH_bin),
+             alpha = 0.9) +
+  # adjusted regression lines
+  geom_line(data = preds, aes(x = x, y = predicted, color = group), size = 1) +
+  geom_ribbon(data = preds, aes(x = x, ymin = conf.low, ymax = conf.high, fill = group),
+              alpha = 0.2) +
+  # labels and scales
+  labs(
+    x = "CRP Age 9 (log2 transformed)",
+    y = "Superior Frontal Grey Matter Volume Age 20",
+    color = "Group"
+  ) +
+  scale_color_manual(values = c("Control" = "#00BFC4", "Psychotic Experiences (PE)" = "#F8766D")) +
+  scale_fill_manual(values = c("Control" = "#00BFC4", "Psychotic Experiences (PE)" = "#F8766D")) +
+  guides(fill = "none") +
+  theme(
+    axis.title.x = element_text(size = 10),  # smaller x-axis title
+    axis.title.y = element_text(size = 10),  # smaller y-axis title
+    legend.position = c(0.40, 0.97),
+    legend.justification = c("right", "top"),
+    legend.background = element_rect(fill = "white")
+  )
+
+p
+
+```
+
+
+
+
+#####
+####
+###
+##
+#
+
+# IL-6
+
+#
+##
+###
+####
+#####
+
+
+```{r}
+# remove infected n = 4
+
+il6_roi <- read.csv(
+file=file.path(root_dir, "Dropbox/R/alspac_iii/R_scripts/inflamm/dataframes/continuous_inflamm_variables/H1_MRI_IL6_rm_infect_n240.csv"),
+na.strings = c("#NULL!", "NA", "N/A", "-9999", "-1")
+)
+
+
+
+
+```
+
+
+```{r}
+
+# adjusted
+lm_model_adj <- lm(supramarginal_scaled_raw ~ IL6_pgml_f9_log2 + age_at_scan + kz021 + tiv + site + c755_imputed, data=il6_roi)
+summary(lm_model_adj) # 'summary' = separate t test but this does not correct for multiple comparisons
+anova(lm_model_adj) # 'anova' = effect of variable, whilst accounting for other variables in model 
+
+
+```
+
+
+
+
+# Marginal effect plot 
+
+Use the fitted model to get predictions of supramarginal volume as IL6 changes, while holding all other covariates constant
+
+```{r only run once}
+il6_roi$pliks18TH_bin <- factor(as.character(il6_roi$pliks18TH_bin),
+                                 levels = c("0", "1"),
+                                 labels = c("Control", "Psychotic Experiences (PE)"))
+```
+
+
+
+## ROI:     Supramarginal
+
+```{r Marginal effect plot 1}
+# Predictions from your adjusted model
+preds <- ggpredict(lm_model_adj, terms = "IL6_pgml_f9_log2 [all]")
+
+il6_sup <- ggplot() +
+  # observed data points
+  geom_point(data = il6_roi,
+             aes(x = IL6_pgml_f9_log2, y = supramarginal_scaled_raw, color = pliks18TH_bin),
+             alpha = 0.6,
+            show.legend = FALSE) +
+  scale_color_manual(values = c("Control" = "#00BFC4", 
+                                "Psychotic Experiences (PE)" = "#F8766D")) +
+  guides(fill = "none") +
+  # adjusted model line
+  geom_line(data = preds, aes(x = x, y = predicted), color = "black", size = 1,
+             show.legend = FALSE) +
+  # adjusted model confidence interval
+  geom_ribbon(data = preds, aes(x = x, ymin = conf.low, ymax = conf.high),
+              fill = "grey70", alpha = 0.3,
+               show.legend = FALSE) +
+  labs(
+#    x = "IL-6 Age 9 (pg/ml, log2 transformed)",
+#    y = "Supramarginal gyrus volume Age 20",
+#    color = "Group"
+     x = "",
+     y = "",
+     color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 14),  # larger x-axis numbers
+    axis.text.y = element_text(size = 14)   # larger y-axis numbers
+  )
+
+il6_sup
+```
+
+```{r}
+ggsave(filename = file.path(root_dir, "Dropbox/R/alspac_iii/R_scripts/inflamm/Write_up/Figures/Fig2_il6_supramarginal_adj_no_label.png"),  plot = il6_sup, width = 6, height = 5, dpi = 300)
+```
+
+
+
+
+## ROI: Precuneus
+
+
+```{r}
+
+# adjusted
+lm_model_pre_adj <- lm(precuneus_raw ~ IL6_pgml_f9_log2 + age_at_scan + kz021 + tiv + site + c755_imputed, data=il6_roi)
+summary(lm_model_pre_adj) # 'summary' = separate t testbut this does not correct for multiple comparisons
+anova(lm_model_pre_adj) # 'anova' = effect of variable, whilst accounting for other variables in model 
+
+
+```
+
+```{r }
+# only run once
+# il6_roi$pliks18TH_bin <- factor(as.character(il6_roi$pliks18TH_bin),
+#                                 levels = c("0", "1"),
+#                                 labels = c("Control", "Psychotic Experiences (PE)"))
+```
+
+```{r Marginal effect plot 2}
+# Predictions from your adjusted model
+preds <- ggpredict(lm_model_pre_adj, terms = "IL6_pgml_f9_log2 [all]")
+
+il6_pre <- ggplot() +
+  # observed data points
+  geom_point(data = il6_roi,
+             aes(x = IL6_pgml_f9_log2, y = precuneus_raw, color = pliks18TH_bin),
+             alpha = 0.6,
+            show.legend = FALSE) +
+  scale_color_manual(values = c("Control" = "#00BFC4", 
+                                "Psychotic Experiences (PE)" = "#F8766D")) +
+  guides(fill = "none") +
+  # adjusted model line
+  geom_line(data = preds, aes(x = x, y = predicted), color = "black", size = 1,
+             show.legend = FALSE) +
+  # adjusted model confidence interval
+  geom_ribbon(data = preds, aes(x = x, ymin = conf.low, ymax = conf.high),
+              fill = "grey70", alpha = 0.3,
+               show.legend = FALSE) +
+  labs(
+#    x = "IL-6 Age 9 (pg/ml, log2 transformed)",
+#    y = "Supramarginal gyrus volume Age 20",
+#    color = "Group"
+     x = "",
+     y = "",
+     color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 14),  # larger x-axis numbers
+    axis.text.y = element_text(size = 14)   # larger y-axis numbers
+  )
+
+il6_pre
+```
+
+```{r}
+ggsave(filename = file.path(root_dir, "Dropbox/R/alspac_iii/R_scripts/inflamm/Write_up/Figures/Fig2_il6_precuneus_adj_no_label.png"),  plot = il6_pre, width = 6, height = 5, dpi = 300)
+```
+
+
+
+## ROI: Hippocampus 
+
+```{r}
+
+
+
+# adjusted
+lm_model_hip_adj <- lm(hippo_raw ~ IL6_pgml_f9_log2 + age_at_scan + kz021 + tiv + site + c755_imputed, data=il6_roi)
+summary(lm_model_hip_adj) # 'summary' = separate t testbut this does not correct for multiple comparisons
+anova(lm_model_hip_adj) # 'anova' = effect of variable, whilst accounting for other variables in model 
+
+
+
+```
+
+```{r Marginal effect plot 3}
+# Predictions from your adjusted model
+preds <- ggpredict(lm_model_hip_adj, terms = "IL6_pgml_f9_log2 [all]")
+
+il6_hip <- ggplot() +
+  # observed data points
+  geom_point(data = il6_roi,
+             aes(x = IL6_pgml_f9_log2, y = hippo_raw, color = pliks18TH_bin),
+             alpha = 0.6,
+            show.legend = FALSE) +
+  scale_color_manual(values = c("Control" = "#00BFC4", 
+                                "Psychotic Experiences (PE)" = "#F8766D")) +
+  guides(fill = "none") +
+  # adjusted model line
+  geom_line(data = preds, aes(x = x, y = predicted), color = "black", size = 1,
+             show.legend = FALSE) +
+  # adjusted model confidence interval
+  geom_ribbon(data = preds, aes(x = x, ymin = conf.low, ymax = conf.high),
+              fill = "grey70", alpha = 0.3,
+               show.legend = FALSE) +
+  labs(
+#    x = "IL-6 Age 9 (pg/ml, log2 transformed)",
+#    y = "Supramarginal gyrus volume Age 20",
+#    color = "Group"
+     x = "",
+     y = "",
+     color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 14),  # larger x-axis numbers
+    axis.text.y = element_text(size = 14)   # larger y-axis numbers
+  )
+
+il6_hip
+```
+
